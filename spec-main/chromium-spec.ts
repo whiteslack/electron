@@ -1550,3 +1550,58 @@ describe('navigator.clipboard', () => {
     expect(clipboard).to.not.equal('Read permission denied.');
   });
 });
+
+ifdescribe((process.platform !== 'linux' || app.isUnityRunning()))('navigator.setAppBadge/clearAppBadge', () => {
+  let w: BrowserWindow;
+  before(async () => {
+    w = new BrowserWindow({
+      show: false
+    });
+    await w.loadFile(path.join(fixturesPath, 'pages', 'blank.html'));
+  });
+
+  const expectedBadgeCount = 42;
+
+  const fireAppBadgeAction: any = (action: string, value: any) => {
+    return w.webContents.executeJavaScript(`
+      navigator.${action}AppBadge(${value}).then(() => 'success').catch(err => err.message)`);
+  };
+
+  // For some reason on macOS changing the badge count doesn't happen right away, so wait
+  // until it changes.
+  async function waitForBadgeCount (value: number) {
+    let badgeCount = app.getBadgeCount();
+    while (badgeCount !== value) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+      badgeCount = app.getBadgeCount();
+    }
+    return badgeCount;
+  }
+
+  after(() => {
+    app.badgeCount = 0;
+    closeAllWindows();
+  });
+
+  it('setAppBadge can set a numerical value', async () => {
+    const result = await fireAppBadgeAction('set', 42);
+    expect(result).to.equal('success');
+    expect(waitForBadgeCount(expectedBadgeCount)).to.eventually.equal(expectedBadgeCount);
+    expect(app.getBadgeCount()).to.equal(expectedBadgeCount);
+  });
+
+  it('setAppBadge can set an empty(dot) value', async () => {
+    const result = await fireAppBadgeAction('set');
+    expect(result).to.equal('success');
+    expect(waitForBadgeCount(0)).to.eventually.equal(0);
+  });
+
+  it('clearAppBadge can clear a value', async () => {
+    app.setBadgeCount(expectedBadgeCount);
+    expect(app.getBadgeCount()).to.equal(expectedBadgeCount);
+    expect(waitForBadgeCount(42)).to.eventually.equal(42);
+    const result = await fireAppBadgeAction('set');
+    expect(result).to.equal('success');
+    expect(waitForBadgeCount(0)).to.eventually.equal(0);
+  });
+});

@@ -1174,9 +1174,9 @@ For `infoType` equal to `basic`:
 
 Using `basic` should be preferred if only basic information like `vendorId` or `driverId` is needed.
 
-### `app.setBadgeCount(count)` _Linux_ _macOS_
+### `app.setBadgeCount([count])`
 
-* `count` Integer
+* `count` Integer (optional) - If a value is provided, set the badge to the provided value otherwise, on macOS and Windows, display a plain white dot (e.g. unknown number of notifications). On Linux, if a value is not provided the badge will not display.
 
 Returns `Boolean` - Whether the call succeeded.
 
@@ -1188,7 +1188,7 @@ On macOS, it shows on the dock icon. On Linux, it only works for Unity launcher.
 **Note:** Unity launcher requires the existence of a `.desktop` file to work,
 for more information please read [Desktop Environment Integration][unity-requirement].
 
-### `app.getBadgeCount()` _Linux_ _macOS_
+### `app.getBadgeCount()`
 
 Returns `Integer` - The current value displayed in the counter badge.
 

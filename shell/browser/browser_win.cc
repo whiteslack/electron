@@ -28,6 +28,7 @@
 #include "chrome/browser/icon_manager.h"
 #include "electron/electron_version.h"
 #include "shell/browser/api/electron_api_app.h"
+#include "shell/browser/badging/badge_manager.h"
 #include "shell/browser/electron_browser_main_parts.h"
 #include "shell/browser/ui/message_box.h"
 #include "shell/browser/ui/win/jump_list.h"
@@ -37,7 +38,10 @@
 #include "shell/common/gin_helper/arguments.h"
 #include "shell/common/gin_helper/dictionary.h"
 #include "shell/common/skia_util.h"
+#include "skia/ext/legacy_display_globals.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/events/keycodes/keyboard_code_conversion_win.h"
+#include "ui/strings/grit/ui_strings.h"
 
 namespace electron {
 
@@ -50,6 +54,19 @@ BOOL CALLBACK WindowsEnumerationHandler(HWND hwnd, LPARAM param) {
   GetWindowThreadProcessId(hwnd, &process_id);
   if (process_id == target_process_id) {
     SetFocus(hwnd);
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+BOOL CALLBACK WindowsEnumerationBadgeHandler(HWND hwnd, LPARAM param) {
+  Browser* browser = reinterpret_cast<Browser*>(param);
+  DWORD process_id = 0;
+
+  GetWindowThreadProcessId(hwnd, &process_id);
+  if (process_id == browser->badge_process_id) {
+    browser->UpdateBadgeContents(hwnd);
     return FALSE;
   }
 
@@ -603,8 +620,93 @@ v8::Local<v8::Promise> Browser::GetApplicationInfoForProtocol(
   return handle;
 }
 
-bool Browser::SetBadgeCount(int count) {
-  return false;
+bool Browser::SetBadgeCount(base::Optional<int> count) {
+  if (count.has_value() && count.value() == 0) {
+    badge_content_ = base::nullopt;
+  } else {
+    badge_content_ = badging::BadgeManager::GetBadgeString(count);
+  }
+  badge_process_id = GetCurrentProcessId();
+  EnumWindows(WindowsEnumerationBadgeHandler,
+              reinterpret_cast<LPARAM>(static_cast<Browser*>(this)));
+  // There are 3 different cases when the badge has a value:
+  // 1. |contents| is between 1 and 99 inclusive => Set the accessibility text
+  //    to a pluralized notification count (e.g. 4 Unread Notifications).
+  // 2. |contents| is greater than 99 => Set the accessibility text to
+  //    More than |kMaxBadgeContent| unread notifications, so the
+  //    accessibility text matches what is displayed on the badge (e.g. More
+  //    than 99 notifications).
+  // 3. The badge is set to 'flag' => Set the accessibility text to something
+  //    less specific (e.g. Unread Notifications).
+  if (count.has_value()) {
+    badge_count_ = count.value();
+    badge_alt_string_ = (uint64_t)badge_count_ <= badging::kMaxBadgeContent
+                            // Case 1.
+                            ? l10n_util::GetPluralStringFUTF8(
+                                  IDS_BADGE_UNREAD_NOTIFICATIONS, badge_count_)
+                            // Case 2.
+                            : l10n_util::GetPluralStringFUTF8(
+                                  IDS_BADGE_UNREAD_NOTIFICATIONS_SATURATED,
+                                  badging::kMaxBadgeContent);
+  } else {
+    // Case 3.
+    badge_alt_string_ =
+        l10n_util::GetStringUTF8(IDS_BADGE_UNREAD_NOTIFICATIONS_UNSPECIFIED);
+    badge_count_ = 0;
+  }
+  return true;
+}
+
+void Browser::UpdateBadgeContents(HWND hwnd) {
+  auto badge = std::make_unique<SkBitmap>();
+  if (badge_content_) {
+    std::string content = badge_content_.value();
+    constexpr int kOverlayIconSize = 16;
+    // This is the color used by the Windows 10 Badge API, for platform
+    // consistency.
+    constexpr int kBackgroundColor = SkColorSetRGB(0x26, 0x25, 0x2D);
+    constexpr int kForegroundColor = SK_ColorWHITE;
+    constexpr int kRadius = kOverlayIconSize / 2;
+    // The minimum gap to have between our content and the edge of the badge.
+    constexpr int kMinMargin = 3;
+    // The amount of space we have to render the icon.
+    constexpr int kMaxBounds = kOverlayIconSize - 2 * kMinMargin;
+    constexpr int kMaxTextSize = 24;  // Max size for our text.
+    constexpr int kMinTextSize = 7;   // Min size for our text.
+
+    badge->allocN32Pixels(kOverlayIconSize, kOverlayIconSize);
+    SkCanvas canvas(*badge.get(),
+                    skia::LegacyDisplayGlobals::GetSkSurfaceProps());
+
+    SkPaint paint;
+    paint.setAntiAlias(true);
+    paint.setColor(kBackgroundColor);
+
+    canvas.clear(SK_ColorTRANSPARENT);
+    canvas.drawCircle(kRadius, kRadius, kRadius, paint);
+
+    paint.reset();
+    paint.setColor(kForegroundColor);
+
+    SkFont font;
+
+    SkRect bounds;
+    int text_size = kMaxTextSize;
+    // Find the largest |text_size| larger than |kMinTextSize| in which
+    // |content| fits into our 16x16px icon, with margins.
+    do {
+      font.setSize(text_size--);
+      font.measureText(content.c_str(), content.size(), SkTextEncoding::kUTF8,
+                       &bounds);
+    } while (text_size >= kMinTextSize &&
+             (bounds.width() > kMaxBounds || bounds.height() > kMaxBounds));
+
+    canvas.drawSimpleText(
+        content.c_str(), content.size(), SkTextEncoding::kUTF8,
+        kRadius - bounds.width() / 2 - bounds.x(),
+        kRadius - bounds.height() / 2 - bounds.y(), font, paint);
+  }
+  taskbar_host_.SetOverlayIcon(hwnd, badge.get(), badge_alt_string_);
 }
 
 void Browser::SetLoginItemSettings(LoginItemSettings settings) {
