@@ -142,8 +142,8 @@ base::string16 Browser::GetApplicationNameForProtocol(const GURL& url) {
 
 bool Browser::SetBadgeCount(base::Optional<int> count) {
   if (IsUnityRunning() && count.has_value()) {
-    unity::SetDownloadCount(count);
-    badge_count_ = count;
+    unity::SetDownloadCount(count.value());
+    badge_count_ = count.value();
     return true;
   } else {
     return false;
